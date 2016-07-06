@@ -1,0 +1,57 @@
+#!/bin/bash -e
+#
+# Copyright 2016-present The Compute Engine Open Source Dashboard Cluster Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Avoid prompts when installing graphite.
+echo "graphite-carbon graphite-carbon/postrm_remove_databases boolean false" | sudo debconf-set-selections
+sudo apt-get install -y graphite-carbon graphite-web apache2 libapache2-mod-wsgi uuid-runtime
+
+# Initial settings config
+sudo sed -i -e "s/^CARBON_CACHE_ENABLED=false/CARBON_CACHE_ENABLED=true/" /etc/default/graphite-carbon
+
+if sudo cat /etc/graphite/local_settings.py | grep "^#SECRET_KEY" >> /dev/null; then
+  sudo sed -i -e "s/^#SECRET_KEY.*/SECRET_KEY='"$(uuidgen)"'/" /etc/graphite/local_settings.py
+fi
+
+if sudo cat /etc/graphite/local_settings.py | grep "^#TIME_ZONE" >> /dev/null; then
+  sudo sed -i -e "s/^#TIME_ZONE.*/TIME_ZONE='America/New_York'/" /etc/graphite/local_settings.py
+fi
+
+# User configuration
+sudo graphite-manage createsuperuser --username=admin --noinput --email=noreply@localhost.com 2> /dev/null || echo "Admin already created."
+
+# Start carbon
+sudo service carbon-cache start
+
+sudo graphite-manage syncdb --noinput
+sudo chown _graphite:_graphite /var/lib/graphite/graphite.db
+
+# Web front end so that services can fetch data.
+sudo tee /etc/apache2/sites-available/graphite-web.conf >> /dev/null <<DELIM
+Listen 3500
+<VirtualHost *:3500>
+	Header set Access-Control-Allow-Origin "http://localhost"
+	Header set Access-Control-Allow-Methods "GET, OPTIONS"
+	Header set Access-Control-Allow-Headers "origin, authorization, accept"
+	ServerName localhost
+DELIM
+
+grep -E "^\s" /usr/share/graphite-web/apache2-graphite.conf | sudo tee -a /etc/apache2/sites-available/graphite-web.conf >> /dev/null
+
+echo "</VirtualHost>" | sudo tee -a /etc/apache2/sites-available/graphite-web.conf >> /dev/null
+
+sudo a2ensite graphite-web
+sudo a2enmod headers
+sudo service apache2 restart
