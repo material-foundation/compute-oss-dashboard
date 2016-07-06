@@ -1,0 +1,124 @@
+#!/bin/bash -e
+#
+# Copyright 2016-present The Compute Engine Open Source Dashboard Cluster Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+. lib/init.sh
+
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+status "Checking gcloud auth..."
+if [ -z "$(gcloud auth list 2> /dev/null | grep \(active\))" ]; then
+  status_no
+
+  status "  Authenticating gcloud..."
+  gcloud auth login || { echo "Failed to authenticate gcloud."; exit 1; }
+fi
+status_ok
+
+status "APIs..."
+if ! gcloud_networks list >> /dev/null 2>&1; then
+  status_no
+
+  echo
+  echo "  Error: The Compute Engine API has not been enabled for $PROJECT."
+  echo
+  echo "  Please visit https://console.developers.google.com/apis/api/compute_component/overview?project=$PROJECT"
+  echo "  2. Enable API button"
+  echo "  3. Rerun this script"
+  echo
+  exit 1
+fi
+
+if ! gcloud_dns_zones list >> /dev/null 2>&1; then
+  status_no
+
+  echo
+  echo "  Error: Google Cloud DNS API has not been enabled for $PROJECT."
+  echo
+  echo "  1. Please visit https://console.developers.google.com/apis/api/dns/overview?project=$PROJECT"
+  echo "  2. Enable API button"
+  echo "  3. Rerun this script"
+  echo
+  exit 1
+fi
+status_ok
+
+status "Network..."
+if [ -z "$(gcloud_networks list | grep "\b$NETWORK_NAME\b")" ]; then
+  status_no
+  status "- Creating $NETWORK_NAME network..."
+  gcloud_networks create \
+    $NETWORK_NAME \
+    --mode auto \
+    2>&1 | logger || exit 1
+fi
+status_ok
+
+status "Static external IP..."
+if [ -z "$(gcloud_addresses list | grep "\b$COLLECTOR_ADDRESS_NAME\b")" ]; then
+  status_no
+
+  status "- Requesting static external IP..."
+  gcloud_addresses create $COLLECTOR_ADDRESS_NAME \
+    2>&1 | logger || exit 1
+fi
+status_ok
+
+COLLECTOR_STATIC_EXTERNAL_IP=$(gcloud_addresses list | grep "\b$COLLECTOR_ADDRESS_NAME\b" | cut -d' ' -f3)
+echo $COLLECTOR_STATIC_EXTERNAL_IP
+
+status "Compute instances..."
+if [ -z "$(gcloud_instances list | grep "\b$COLLECTOR_VM_NAME\b")" ]; then
+  status_no
+
+  status "- Creating $COLLECTOR_VM_NAME compute instance..."
+  gcloud_instances create "$COLLECTOR_VM_NAME" \
+    --address "$COLLECTOR_STATIC_EXTERNAL_IP" \
+    --boot-disk-size "200GB" \
+    --image "/ubuntu-os-cloud/ubuntu-1604-xenial-v20160627" \
+    --machine-type "n1-standard-1" \
+    --network "$NETWORK_NAME" \
+    --zone "$ZONE" \
+    --tags "$VM_TAG" \
+    --scopes cloud-platform \
+    2>&1 | logger || exit 1
+fi
+status_ok
+
+status "  Waiting for compute instance to activate..."
+while [ -z "$(gcloud_instances list | grep "\b$COLLECTOR_VM_NAME\b")" ]; do
+  sleep 10
+done
+status_ok
+
+COLLECTOR_VM_INTERNAL_IP=$(gcloud_instances list | grep "\b$COLLECTOR_VM_NAME\b" | awk '{print $4}')
+COLLECTOR_VM_EXTERNAL_IP=$(gcloud_instances list | grep "\b$COLLECTOR_VM_NAME\b" | awk '{print $5}')
+
+status "internal IP: $COLLECTOR_VM_INTERNAL_IP. external IP: $COLLECTOR_VM_EXTERNAL_IP. "
+status_ok
+
+status "Allow grafana..."
+if [ -z "$(gcloud_firewall_rules list | grep "\b$NETWORK_NAME\b" | grep "\ballow-grafana\b")" ]; then
+  status_no
+
+  status "- Creating firewall rule 'allow-grafana'..."
+  gcloud_firewall_rules create \
+    allow-grafana \
+    --allow "tcp:3000" \
+    --network "$NETWORK_NAME" \
+    --source-ranges "0.0.0.0/0" \
+    2>&1 | logger || exit 1
+fi
+status_ok

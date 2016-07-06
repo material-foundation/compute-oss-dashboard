@@ -1,0 +1,16 @@
+[Unit]
+Description=graphite-oss-daemon
+
+[Service]
+ExecStart=/usr/bin/nodejs index.js
+Restart=always
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=graphite-oss-daemon
+User=graphite-oss-daemon
+Group=graphite-oss-daemon
+Environment=NODE_ENV=production
+WorkingDirectory=/opt/graphite-oss-daemon/
+
+[Install]
+WantedBy=multi-user.target
