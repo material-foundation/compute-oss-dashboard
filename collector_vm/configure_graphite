@@ -29,6 +29,12 @@ if sudo cat /etc/graphite/local_settings.py | grep "^#TIME_ZONE" >> /dev/null; t
   sudo sed -i -e "s/^#TIME_ZONE.*/TIME_ZONE='America/New_York'/" /etc/graphite/local_settings.py
 fi
 
+if [ ! -f /etc/carbon/storage-schemas.conf ]; then
+  sudo cp /usr/share/doc/graphite-carbon/examples/storage-schemas.conf.example /etc/carbon/storage-schemas.conf
+fi
+
+sudo sed -i -e "s/retentions = 60s:1d/retentions = 60s:10y/" /etc/carbon/storage-schemas.conf
+
 # User configuration
 sudo graphite-manage createsuperuser --username=admin --noinput --email=noreply@localhost.com 2> /dev/null || echo "Admin already created."
 
